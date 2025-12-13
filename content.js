@@ -1,19 +1,19 @@
-// content.js (updated)
-// This runs in the content-script isolated world and only interacts with the page via DOM and CustomEvents.
+// ==================== SCRIPT INJECTION ====================
 
+// Inject scripts into page context to bypass extension sandbox limits
 function attachMonitor() {
   const configScript = document.createElement("script");
+  // Load config first so shared globals are available
   configScript.src = chrome.runtime.getURL("monitor-config.js");
   configScript.onload = function () {
+    // Cleanup to avoid polluting DOM
     this.remove();
 
-    // Load XHR Monitor (if you ever add one)
-    // (document.head || document.documentElement).appendChild(xhrScript);
-
-    // Load Fetch Monitor
     const fetchScript = document.createElement("script");
+    // Separate fetch logic to keep concerns isolated
     fetchScript.src = chrome.runtime.getURL("fetch-monitor.js");
     fetchScript.onload = function () {
+      // Remove after execution to reduce footprint
       this.remove();
     };
     (document.head || document.documentElement).appendChild(fetchScript);
@@ -21,292 +21,322 @@ function attachMonitor() {
   (document.head || document.documentElement).appendChild(configScript);
 }
 
-// -------------------- THEME SYSTEM --------------------
+// ==================== THEME SYSTEM ====================
 
+// Centralized theme resolver to stay in sync with ChatGPT UI
 function getThemeStyles() {
+  // Rely on root class instead of media query for accuracy
   const isDark = document.documentElement.classList.contains("dark");
 
   return {
     isDark,
+    // Semi-transparent to blend with native UI
     panelBg: isDark ? "rgba(0, 0, 0, 0.20)" : "rgba(255, 255, 255, 0.65)",
-    textColor: isDark ? "white" : "#111",
-    borderColor: isDark ? "rgb(49,49,49)" : "#ccc",
-    inputBorder: isDark ? "rgba(255,255,255,0.25)" : "#aaa",
-    searchIconColor: isDark ? "white" : "#444",
-    hoverBlue: "#2a78ff",
+    textColor: isDark ? "#ffffff" : "#111111",
+    borderColor: isDark ? "rgb(49,49,49)" : "#cccccc",
+    linkColor: isDark ? "#4da3ff" : "#2a78ff",
   };
 }
 
-// Tell page scripts to redraw when theme changes
-function observeThemeChanges() {
-  const observer = new MutationObserver(() => {
-    document.dispatchEvent(new CustomEvent("chatgpt-theme-change"));
+// Re-apply styles dynamically instead of rebuilding UI
+function applyThemeToUI() {
+  const T = getThemeStyles();
+  const panel = document.querySelector(".chatgpt-api-monitor");
+  const toggleBtn = document.querySelector(".chatgpt-api-monitor-toggle");
+
+  // Exit early if UI is not mounted yet
+  if (!panel) return;
+
+  // Ensure panel visually matches current theme
+  panel.style.backgroundColor = T.panelBg;
+  panel.style.border = `1px solid ${T.borderColor}`;
+  panel.style.color = T.textColor;
+
+  // Keep toggle consistent when panel is hidden
+  if (toggleBtn) {
+    toggleBtn.style.backgroundColor = T.panelBg;
+    toggleBtn.style.border = `1px solid ${T.borderColor}`;
+    toggleBtn.style.color = T.textColor;
+  }
+
+  // Header styled separately due to drag behavior
+  const header = panel.querySelector(".chatgpt-monitor-header");
+  if (header) {
+    header.style.borderBottom = `1px solid ${T.borderColor}`;
+    header.style.color = T.textColor;
+  }
+
+  // Search box needs explicit border to remain visible
+  const searchWrap = panel.querySelector(".chatgpt-search-wrap");
+  if (searchWrap) {
+    searchWrap.style.border = `1px solid ${T.borderColor}`;
+  }
+
+  // Force inherited text color to avoid browser defaults
+  panel.querySelectorAll("button, input, span").forEach((el) => {
+    el.style.color = T.textColor;
   });
 
+  // Link styled manually to keep contrast accessible
+  const report = panel.querySelector(".chatgpt-report-link");
+  if (report) {
+    report.style.color = T.linkColor;
+    report.style.borderTop = `1px solid ${T.borderColor}`;
+  }
+}
+
+// Watch for ChatGPT theme toggles without polling
+function observeThemeChanges() {
+  const observer = new MutationObserver(() => {
+    applyThemeToUI();
+  });
+
+  // Only observe class changes to reduce overhead
   observer.observe(document.documentElement, {
     attributes: true,
     attributeFilter: ["class"],
   });
 }
 
-// -------------------- UI ELEMENTS --------------------
+// ==================== UI ====================
 
-// Show Chats button
+// Floating toggle avoids permanent UI clutter
 function createToggleButton() {
   const T = getThemeStyles();
-
   const button = document.createElement("button");
-  button.classList.add("chatgpt-api-monitor-toggle");
+  button.className = "chatgpt-api-monitor-toggle";
   button.innerHTML = "Show Chats";
-  button.style.position = "fixed";
-  button.style.top = "70px";
-  button.style.right = "10px";
-  button.style.padding = "8px 16px";
-  button.style.backgroundColor = T.panelBg;
-  button.style.backdropFilter = "blur(10px)";
-  button.style.webkitBackdropFilter = "blur(10px)";
-  button.style.color = T.textColor;
-  button.style.borderRadius = "5px";
-  button.style.border = `1px solid ${T.borderColor}`;
-  button.style.cursor = "pointer";
-  button.style.zIndex = "1000";
-  button.style.display = "block";
-  button.style.fontSize = "14px";
-  button.style.fontWeight = "500";
+
+  // Inline styles avoid dependency on external CSS
+  Object.assign(button.style, {
+    position: "fixed",
+    top: "70px",
+    right: "10px",
+    padding: "8px 16px",
+    backgroundColor: T.panelBg,
+    backdropFilter: "blur(10px)",
+    border: `1px solid ${T.borderColor}`,
+    borderRadius: "5px",
+    color: T.textColor,
+    cursor: "pointer",
+    zIndex: "1000",
+    fontSize: "14px",
+    fontWeight: "500",
+  });
+
+  // Single toggle function keeps state simple
   button.onclick = toggleMonitor;
   document.body.appendChild(button);
-
-  // Make button draggable
+  // Draggable so it doesn't block ChatGPT controls
   makeDraggable(button);
-
-  return button;
 }
 
+// Toggle instead of destroy to preserve state
 function toggleMonitor() {
-  const monitorDiv = document.querySelector(".chatgpt-api-monitor");
-  const toggleButton = document.querySelector(".chatgpt-api-monitor-toggle");
+  const panel = document.querySelector(".chatgpt-api-monitor");
+  const toggle = document.querySelector(".chatgpt-api-monitor-toggle");
+  if (!panel) return;
 
-  if (monitorDiv) {
-    const isVisible = monitorDiv.style.display !== "none";
-    monitorDiv.style.display = isVisible ? "none" : "block";
-    toggleButton.style.display = isVisible ? "block" : "none";
-  }
+  // Visibility-based toggle avoids extra state variables
+  const visible = panel.style.display !== "none";
+  panel.style.display = visible ? "none" : "block";
+  toggle.style.display = visible ? "block" : "none";
 }
 
+// Main container built once for performance
 function createMonitorDiv() {
   const T = getThemeStyles();
-
   const div = document.createElement("div");
-  // add a class to the div
-  div.classList.add("chatgpt-api-monitor");
+  div.className = "chatgpt-api-monitor";
 
-  // Create close button
-  const closeButton = document.createElement("button");
-  closeButton.innerHTML = "×";
-  closeButton.style.position = "absolute";
-  closeButton.style.top = "5px";
-  closeButton.style.right = "5px";
-  closeButton.style.color = T.textColor;
-  closeButton.style.border = "none";
-  closeButton.style.background = "transparent";
-  closeButton.style.fontSize = "20px";
-  closeButton.style.cursor = "pointer";
-  closeButton.style.padding = "0 5px";
-  closeButton.onclick = toggleMonitor;
+  // Fixed positioning keeps it independent of page layout
+  Object.assign(div.style, {
+    position: "fixed",
+    top: "70px",
+    right: "10px",
+    padding: "10px",
+    paddingBottom: "30px",
+    backgroundColor: T.panelBg,
+    backdropFilter: "blur(10px)",
+    border: `1px solid ${T.borderColor}`,
+    borderRadius: "5px",
+    zIndex: "1000",
+    maxWidth: "360px",
+    minWidth: "360px",
+    fontSize: "14px",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    display: "none",
+  });
 
-  // Create draggable header
-  const dragHandle = document.createElement("div");
-  dragHandle.style.paddingBottom = "5px";
-  dragHandle.style.marginBottom = "5px";
-  dragHandle.style.cursor = "move";
-  dragHandle.style.color = T.textColor;
-  dragHandle.style.fontSize = "14px";
-  dragHandle.style.fontWeight = "600";
-  dragHandle.style.borderBottom = `1px solid ${T.borderColor}`;
-  dragHandle.innerHTML = "My Chats";
+  // Close button improves discoverability vs toggle only
+  const closeBtn = document.createElement("button");
+  closeBtn.innerHTML = "×";
+  Object.assign(closeBtn.style, {
+    position: "absolute",
+    top: "5px",
+    right: "5px",
+    background: "transparent",
+    border: "none",
+    fontSize: "20px",
+    cursor: "pointer",
+  });
+  closeBtn.onclick = toggleMonitor;
 
-  // --- Search Bar (content script) ---
-  const searchContainer = document.createElement("div");
-  searchContainer.style.display = "flex";
-  searchContainer.style.alignItems = "center";
-  searchContainer.style.padding = "1px 8px";
-  searchContainer.style.borderRadius = "5px";
-  searchContainer.style.border = `1px solid ${T.borderColor}`;
-  searchContainer.style.marginBottom = "10px";
-  searchContainer.style.marginTop = "10px";
+  // Header doubles as drag handle to save space
+  const header = document.createElement("div");
+  header.innerHTML = "My Chats";
+  header.className = "chatgpt-monitor-header";
+  Object.assign(header.style, {
+    fontWeight: "600",
+    marginBottom: "6px",
+    cursor: "move",
+    paddingBottom: "5px",
+  });
 
+  // Search wrapper groups icon, input, and clear action
+  const searchWrap = document.createElement("div");
+  searchWrap.className = "chatgpt-search-wrap";
+  Object.assign(searchWrap.style, {
+    display: "flex",
+    alignItems: "center",
+    padding: "2px 8px",
+    borderRadius: "5px",
+    margin: "10px 0",
+  });
+
+  // Emoji avoids loading icon assets
   const searchIcon = document.createElement("span");
   searchIcon.innerHTML = "🧐";
-  searchIcon.style.marginRight = "4px";
-  searchIcon.style.fontSize = "14px";
+  searchIcon.style.marginRight = "6px";
 
+  // Transparent input blends into panel background
   const searchInput = document.createElement("input");
-  searchInput.type = "text";
   searchInput.placeholder = "Search chat...";
-  searchInput.style.flex = "1";
-  searchInput.style.border = "none";
-  searchInput.style.outline = "none";
-  searchInput.style.background = "transparent";
-  searchInput.style.color = T.textColor;
-  searchInput.style.fontSize = "14px";
-
-  // 🔥 REMOVE BLUE OUTLINE COMPLETELY (Chrome fix)
-  searchInput.style.boxShadow = "0 0 0 0 transparent";
-  searchInput.style.webkitTapHighlightColor = "transparent";
-
-  searchInput.addEventListener("focus", () => {
-    searchInput.style.outline = "none";
-    searchInput.style.boxShadow = "0 0 0 0 transparent";
+  Object.assign(searchInput.style, {
+    flex: "1",
+    background: "transparent",
+    border: "none",
+    outline: "none",
+    boxShadow: "none",
+    fontSize: "14px",
   });
 
-  searchInput.addEventListener("focusin", () => {
-    searchInput.style.outline = "none";
-    searchInput.style.boxShadow = "0 0 0 0 transparent";
+  // Defensive styling to prevent browser focus artifacts
+  ["focus", "focusin", "mousedown"].forEach((ev) =>
+    searchInput.addEventListener(ev, () => {
+      searchInput.style.outline = "none";
+      searchInput.style.boxShadow = "none";
+    })
+  );
+
+  // Emit custom event to decouple UI from data logic
+  searchInput.addEventListener("input", (e) => {
+    document.dispatchEvent(
+      new CustomEvent("chatgpt-monitor-search", {
+        detail: { query: e.target.value || "" },
+      })
+    );
   });
 
-  searchInput.addEventListener("mousedown", () => {
-    // Prevent Chrome from applying its default focus ring
-    searchInput.style.outline = "none";
-    searchInput.style.boxShadow = "0 0 0 0 transparent";
-  });
-
-  // Clear button (×)
+  // Clear button improves usability for long queries
   const clearBtn = document.createElement("button");
   clearBtn.innerHTML = "✕";
-  clearBtn.title = "Clear";
-  clearBtn.style.border = "none";
-  clearBtn.style.background = "transparent";
-  clearBtn.style.cursor = "pointer";
-  clearBtn.style.marginLeft = "8px";
-  clearBtn.style.fontSize = "14px";
-  clearBtn.style.color = T.textColor;
+  Object.assign(clearBtn.style, {
+    background: "transparent",
+    border: "none",
+    cursor: "pointer",
+    fontSize: "14px",
+  });
 
   clearBtn.onclick = () => {
     searchInput.value = "";
-    // Dispatch a custom event to the page so page-js receives the query
-    const evt = new CustomEvent("chatgpt-monitor-search", {
-      detail: { query: "" },
-    });
-    document.dispatchEvent(evt);
-    searchInput.focus();
+    document.dispatchEvent(
+      new CustomEvent("chatgpt-monitor-search", {
+        detail: { query: "" },
+      })
+    );
   };
 
-  // Dispatch search query to page context on input (so monitor-config.js can pick it up)
-  searchInput.addEventListener("input", (e) => {
-    const q = e.target.value || "";
-    const evt = new CustomEvent("chatgpt-monitor-search", {
-      detail: { query: q },
-    });
-    // dispatch on document — page scripts can listen
-    document.dispatchEvent(evt);
+  searchWrap.append(searchIcon, searchInput, clearBtn);
+
+  // Content container left generic for external renderer
+  const content = document.createElement("div");
+  content.className = "content-wrapper";
+  content.innerHTML = "Loading...";
+
+  // Fixed report link for feedback without cluttering UI
+  const report = document.createElement("a");
+  report.className = "chatgpt-report-link";
+  report.href = "https://github.com/iamtushar28/Chatgpt-boost/issues/new";
+  report.target = "_blank";
+  report.innerHTML = "Report an issue ⚠️";
+  Object.assign(report.style, {
+    position: "absolute",
+    bottom: "0",
+    right: "0px",
+    padding: "2px",
+    paddingRight: "3px",
+    width: "100%",
+    textAlign: "right",
   });
 
-  searchContainer.appendChild(searchIcon);
-  searchContainer.appendChild(searchInput);
-  searchContainer.appendChild(clearBtn);
-
-  // Create content wrapper
-  const contentWrapper = document.createElement("div");
-  contentWrapper.classList.add("content-wrapper");
-  contentWrapper.innerHTML =
-    '<div style="margin: 0 0 10px 0;">Loading...</div>';
-
-  // add a style to the div
-  div.style.position = "fixed";
-  div.style.top = "70px";
-  div.style.right = "10px";
-  div.style.backgroundColor = T.panelBg;
-  div.style.backdropFilter = "blur(10px)";
-  div.style.webkitBackdropFilter = "blur(10px)";
-  div.style.padding = "10px";
-  div.style.paddingBottom = "30px";
-  div.style.zIndex = "1000";
-  div.style.border = `1px solid ${T.borderColor}`;
-  div.style.borderRadius = "5px";
-  div.style.boxShadow = "0 2px 10px rgba(0,0,0,0.1)";
-  div.style.maxWidth = "360px";
-  div.style.minWidth = "360px";
-  div.style.fontSize = "14px";
-  div.style.fontFamily = "system-ui, -apple-system, sans-serif";
-  div.style.display = "none";
-
-  // Create report issue link
-  const reportLink = document.createElement("a");
-  reportLink.href = "https://github.com/iamtushar28/Chatgpt-boost/issues/new";
-  reportLink.target = "_blank";
-  reportLink.innerHTML = "Report an issue ⚠️";
-  reportLink.style.position = "absolute";
-  reportLink.style.bottom = "0";
-  reportLink.style.right = "0px";
-  reportLink.style.color = "#4da3ff";
-  reportLink.style.padding = "6px";
-  reportLink.style.paddingRight = "14px";
-  reportLink.style.textAlign = "right";
-  reportLink.style.borderTop = `1px solid ${T.borderColor}`;
-  reportLink.style.width = "100%";
-
-  div.appendChild(closeButton);
-  div.appendChild(dragHandle);
-  // insert search container under the header
-  div.appendChild(searchContainer);
-  div.appendChild(contentWrapper);
-  div.appendChild(reportLink);
+  div.append(closeBtn, header, searchWrap, content, report);
   document.body.appendChild(div);
 
-  // Make div draggable
-  makeDraggable(div, dragHandle);
+  // Restrict drag to header to avoid accidental moves
+  makeDraggable(div, header);
+  applyThemeToUI();
 }
 
-// Function to make an element draggable
-function makeDraggable(element, dragHandle) {
-  let pos1 = 0,
-    pos2 = 0,
-    pos3 = 0,
-    pos4 = 0;
+// ==================== DRAG ====================
 
-  if (dragHandle) {
-    // If present, the dragHandle is where you move the element from
-    dragHandle.onmousedown = dragMouseDown;
-  } else {
-    // Otherwise, move the element from anywhere inside it
-    element.onmousedown = dragMouseDown;
-  }
+// Simple drag logic avoids external dependencies
+function makeDraggable(el, handle) {
+  let x = 0,
+    y = 0,
+    mx = 0,
+    my = 0;
 
-  function dragMouseDown(e) {
+  // Mouse-based drag chosen for desktop-first UX
+  (handle || el).onmousedown = (e) => {
     e.preventDefault();
-    // Get the mouse cursor position at startup
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    document.onmouseup = closeDragElement;
-    // Call function whenever the cursor moves
-    document.onmousemove = elementDrag;
+    mx = e.clientX;
+    my = e.clientY;
+    document.onmousemove = drag;
+    document.onmouseup = stop;
+  };
+
+  // Reposition element relative to last cursor position
+  function drag(e) {
+    x = mx - e.clientX;
+    y = my - e.clientY;
+    mx = e.clientX;
+    my = e.clientY;
+    el.style.top = el.offsetTop - y + "px";
+    el.style.left = el.offsetLeft - x + "px";
+    // Disable right anchoring once user moves it
+    el.style.right = "auto";
   }
 
-  function elementDrag(e) {
-    e.preventDefault();
-    // Calculate the new cursor position
-    pos1 = pos3 - e.clientX;
-    pos2 = pos4 - e.clientY;
-    pos3 = e.clientX;
-    pos4 = e.clientY;
-    // Set the element's new position
-    element.style.top = element.offsetTop - pos2 + "px";
-    element.style.left = element.offsetLeft - pos1 + "px";
-    element.style.right = "auto"; // Remove the right position so it doesn't conflict
-  }
-
-  function closeDragElement() {
-    // Stop moving when mouse button is released
+  // Cleanup handlers to prevent leaks
+  function stop() {
     document.onmouseup = null;
     document.onmousemove = null;
   }
 }
 
-attachMonitor();
+// ==================== INIT ====================
 
+// Inject scripts as early as possible
+attachMonitor();
+// Start listening immediately for theme changes
+observeThemeChanges();
+
+// Delay UI creation until ChatGPT layout stabilizes
 document.addEventListener("DOMContentLoaded", () => {
   setTimeout(() => {
     createMonitorDiv();
     createToggleButton();
+    applyThemeToUI();
   }, 1200);
 });
