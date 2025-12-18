@@ -34,7 +34,6 @@ No data is sent anywhere — fully private.
 # 🌟 Preview
 
 Below are the primary UI features of the extension.  
-(Replace the image placeholders with actual screenshots.)
 
 ---
 
