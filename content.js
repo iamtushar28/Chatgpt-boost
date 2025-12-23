@@ -199,15 +199,17 @@ function createMonitorDiv() {
   Object.assign(searchWrap.style, {
     display: "flex",
     alignItems: "center",
-    padding: "2px 8px",
-    borderRadius: "5px",
+    padding: "6px 10px", //  more vertical padding
+    borderRadius: "6px",
     margin: "10px 0",
+    height: "36px", //  explicit height
+    boxSizing: "border-box",
   });
 
   // Emoji avoids loading icon assets
   const searchIcon = document.createElement("span");
   searchIcon.innerHTML = "🧐";
-  searchIcon.style.marginRight = "6px";
+  searchIcon.style.marginRight = "1px";
 
   // Transparent input blends into panel background
   const searchInput = document.createElement("input");
@@ -217,8 +219,9 @@ function createMonitorDiv() {
     background: "transparent",
     border: "none",
     outline: "none",
-    boxShadow: "none",
     fontSize: "14px",
+    height: "100%", //  fill search bar height
+    lineHeight: "20px",
   });
 
   // Defensive styling to prevent browser focus artifacts

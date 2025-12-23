@@ -1,9 +1,11 @@
 // Injected into page context so it can share state with wrapped fetch
 
+// =====================================================
 // -------------------- THEME SYSTEM --------------------
+// =====================================================
 
 // Inject CSS variables instead of hardcoding colors in JS
-// This keeps styling reactive to ChatGPT theme without rerendering UI
+// Keeps styling reactive to ChatGPT theme without rerendering UI
 (function injectThemeCSS() {
   const style = document.createElement("style");
   style.innerHTML = `
@@ -14,22 +16,21 @@
       --chatgpt-monitor-border: rgb(49,49,49);
     }
   `;
-  // Attach to document root so variables are globally available
   document.documentElement.appendChild(style);
 })();
 
-// Lightweight helper to resolve theme-dependent colors at runtime
+// Resolve theme-dependent colors dynamically
 function getThemeStyles() {
-  // Use ChatGPT’s own theme flag for consistency
   const isDark = document.documentElement.classList.contains("dark");
   return {
     textColor: isDark ? "#ffffff" : "#111111",
-    // Accent color chosen for visibility on both themes
     hoverColor: "#4da3ff",
   };
 }
 
+// =====================================================
 // -------------------- GLOBAL STATE --------------------
+// =====================================================
 
 // Stores last full conversation payload returned by backend
 window.__CHATGPT_MONITOR_RESPONSE = {};
@@ -40,24 +41,28 @@ window.__CHATGPT_MONITOR_REQUEST = [];
 // Canonical map of user-visible messages (id → text)
 window.__CHATGPT_USER_MESSAGES = {};
 
-// -------------------- CONFIG OBJECT --------------------
+// Tracks currently active conversation to detect chat switches
+window.__CHATGPT_MONITOR_ACTIVE_CONVERSATION_ID = null;
 
-// Single shared config object used by fetch wrapper and UI
+// =====================================================
+// -------------------- CONFIG OBJECT -------------------
+// =====================================================
+
 window.__CHATGPT_MONITOR_CONFIG = {
-  // Strict pattern limits monitoring to ChatGPT conversation APIs
+  // Only monitor ChatGPT conversation APIs
   apiPattern:
     /^https:\/\/chatgpt\.com\/backend-api(?:\/[^\/]*)?\/conversation(?:\/[0-9a-f-]+)?$/,
 
-  // Search state kept here to avoid duplicating UI logic
+  // Search query for UI filtering
   searchQuery: "",
 
-  // Central filter gate to reduce unnecessary processing
+  // Gatekeeper for fetch wrapper
   shouldLogRequest(url) {
     return this.apiPattern.test(url);
   },
 
   // Extract user messages from server response mapping
-  // This covers messages loaded from history / refresh
+  // Covers history load & refresh
   filterUserMessages() {
     const mapping = window.__CHATGPT_MONITOR_RESPONSE.mapping;
     if (!mapping) return {};
@@ -73,8 +78,8 @@ window.__CHATGPT_MONITOR_CONFIG = {
     return window.__CHATGPT_USER_MESSAGES;
   },
 
-  // Capture user messages from outgoing POST requests
-  // This fills gaps before server responses arrive
+  // Capture user messages from outbound POST requests
+  // Handles messages before server mapping arrives
   addUserPostRequests() {
     for (const req of window.__CHATGPT_MONITOR_REQUEST) {
       const msg = req?.messages?.[0];
@@ -85,8 +90,7 @@ window.__CHATGPT_MONITOR_CONFIG = {
     return window.__CHATGPT_USER_MESSAGES;
   },
 
-  // Scrolls ChatGPT UI to the corresponding message
-  // Used to keep monitor and main chat in sync
+  // Scroll main ChatGPT UI to a specific message
   scrollToMessage(messageId) {
     const el = document.querySelector(`[data-message-id="${messageId}"]`);
     if (el) {
@@ -94,64 +98,53 @@ window.__CHATGPT_MONITOR_CONFIG = {
     }
   },
 
-  // -------------------- MAIN RENDER (YOUR LOGIC PRESERVED) --------------------
+  // =====================================================
+  // -------------------- UI RENDER ----------------------
+  // =====================================================
 
-  // Rebuilds monitor UI from current state
-  // Retry logic handles timing issues during navigation
-  updateMonitorDiv: function (retryCount = 0) {
+  updateMonitorDiv(retryCount = 0) {
     const monitorDiv = document.querySelector(".chatgpt-api-monitor");
 
-    // Merge server-derived and request-derived messages
+    // Merge mapping-derived + request-derived messages
     let userMessages = this.filterUserMessages();
     userMessages = this.addUserPostRequests();
 
     if (monitorDiv && Object.keys(userMessages).length > 0) {
-      let contentWrapper = monitorDiv.querySelector(".content-wrapper");
+      let contentWrapper =
+        monitorDiv.querySelector(".content-wrapper") || monitorDiv.children[1];
 
-      // Fallback protects against unexpected DOM structure changes
-      if (!contentWrapper) {
-        contentWrapper = monitorDiv.children[1];
-      }
-
-      // Full rerender avoids complex diffing logic
       contentWrapper.innerHTML = "";
 
-      const fullMappingSection = document.createElement("div");
-      fullMappingSection.style.overflow = "auto";
-      fullMappingSection.style.maxHeight = "360px";
+      const list = document.createElement("div");
+      list.style.overflow = "auto";
+      list.style.maxHeight = "360px";
 
-      // Normalize search once per render
       const query = (this.searchQuery || "").toLowerCase();
       const T = getThemeStyles();
       let anyShown = false;
 
       Object.entries(userMessages).forEach(([id, message]) => {
-        const messageText =
+        const text =
           message === undefined || message === null ? "" : String(message);
 
-        // Client-side filtering keeps UI responsive
-        if (query && !messageText.toLowerCase().includes(query)) return;
-
+        if (query && !text.toLowerCase().includes(query)) return;
         anyShown = true;
 
-        const messageDiv = document.createElement("div");
-        messageDiv.style.marginBottom = "4px";
-        messageDiv.style.padding = "4px";
+        const wrapper = document.createElement("div");
+        wrapper.style.marginBottom = "4px";
+        wrapper.style.padding = "4px";
 
-        // Button used instead of link for better keyboard & click handling
-        const idButton = document.createElement("button");
-        idButton.innerHTML = messageText;
+        const btn = document.createElement("button");
+        btn.innerHTML = text;
 
-        Object.assign(idButton.style, {
+        Object.assign(btn.style, {
           cursor: "pointer",
           border: "none",
           padding: "4px 0",
           textAlign: "left",
           width: "100%",
-          // CSS variable keeps border theme-aware
           borderBottom: "1px solid var(--chatgpt-monitor-border)",
           fontSize: "14px",
-          // Line clamp avoids oversized entries
           display: "-webkit-box",
           WebkitLineClamp: "2",
           WebkitBoxOrient: "vertical",
@@ -161,85 +154,89 @@ window.__CHATGPT_MONITOR_CONFIG = {
           color: T.textColor,
         });
 
-        // Click syncs monitor selection with main chat
-        idButton.onclick = () => this.scrollToMessage(id);
+        btn.onclick = () => this.scrollToMessage(id);
 
-        // Hover styling applied manually to avoid CSS injection complexity
-        idButton.addEventListener("mouseover", () => {
-          idButton.style.color = T.hoverColor;
+        btn.addEventListener("mouseover", () => {
+          btn.style.color = T.hoverColor;
         });
 
-        idButton.addEventListener("mouseout", () => {
-          idButton.style.color = getThemeStyles().textColor;
+        btn.addEventListener("mouseout", () => {
+          btn.style.color = getThemeStyles().textColor;
         });
 
-        messageDiv.appendChild(idButton);
-        fullMappingSection.appendChild(messageDiv);
+        wrapper.appendChild(btn);
+        list.appendChild(wrapper);
       });
 
-      // Explicit empty-state improves UX for search
       if (!anyShown) {
-        fullMappingSection.innerHTML =
-          '<div style="margin: 10px 0;">No messages matched your search.</div>';
+        list.innerHTML =
+          '<div style="margin:10px 0;">No messages matched your search.</div>';
       }
 
-      contentWrapper.appendChild(fullMappingSection);
+      contentWrapper.appendChild(list);
 
-      // Auto-scroll kept timing-safe to avoid invisible container issues
+      // Safe auto-scroll
       const tryScroll = () => {
-        if (fullMappingSection.offsetParent !== null) {
-          // Only scroll when element is actually visible
-          fullMappingSection.scrollTop = fullMappingSection.scrollHeight;
+        if (list.offsetParent !== null) {
+          list.scrollTop = list.scrollHeight;
         } else {
-          // Defer until layout stabilizes
           requestAnimationFrame(tryScroll);
         }
       };
-
       tryScroll();
     } else if (retryCount < 5) {
-      // Retry accounts for delayed DOM or async fetch timing
       setTimeout(() => {
         this.updateMonitorDiv(retryCount + 1);
       }, 2000);
     }
   },
 
-  // -------------------- RESPONSE HANDLER --------------------
+  // =====================================================
+  // ---------------- RESPONSE HANDLER -------------------
+  // =====================================================
 
-  // Entry point called by fetch-monitor after each response
   logResponse(url, response, request) {
-    // Only store full payloads that include conversation mapping
+    // Determine conversation ID from request or response
+    const newConversationId =
+      request?.conversation_id || response?.conversation_id || null;
+
+    // Detect chat switch
+    if (
+      newConversationId &&
+      window.__CHATGPT_MONITOR_ACTIVE_CONVERSATION_ID &&
+      newConversationId !== window.__CHATGPT_MONITOR_ACTIVE_CONVERSATION_ID
+    ) {
+      // Clear all previous chat state
+      window.__CHATGPT_MONITOR_RESPONSE = {};
+      window.__CHATGPT_MONITOR_REQUEST = [];
+      window.__CHATGPT_USER_MESSAGES = {};
+    }
+
+    // Update active conversation
+    if (newConversationId) {
+      window.__CHATGPT_MONITOR_ACTIVE_CONVERSATION_ID = newConversationId;
+    }
+
+    // Store latest mapping response
     if (response?.mapping) {
       window.__CHATGPT_MONITOR_RESPONSE = response;
     }
 
-    // Detect chat reset scenarios from request intent
-    const isDeleteChat = request?.is_visible === false;
-    const isNewChat = request && !request.conversation_id;
-
-    if (isDeleteChat || isNewChat) {
-      // Clear all state to prevent cross-chat leakage
-      window.__CHATGPT_MONITOR_RESPONSE = {};
-      window.__CHATGPT_MONITOR_REQUEST = [];
-      window.__CHATGPT_USER_MESSAGES = {};
-      if (isDeleteChat) return;
-    }
-
-    // Preserve outbound requests for message reconstruction
+    // Preserve outbound requests
     if (request) {
       window.__CHATGPT_MONITOR_REQUEST.push(request);
     }
 
-    // Trigger UI refresh after state update
+    // Refresh UI
     this.updateMonitorDiv(0);
   },
 };
 
+// =====================================================
 // -------------------- SEARCH EVENT --------------------
+// =====================================================
 
-// Decoupled search handling via custom event
-// Allows UI layer to stay independent of data logic
+// Decoupled search input → monitor update
 document.addEventListener("chatgpt-monitor-search", (e) => {
   const cfg = window.__CHATGPT_MONITOR_CONFIG;
   if (!cfg) return;
